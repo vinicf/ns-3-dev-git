@@ -3,3 +3,15 @@
 
 # Include specific files that should be tracked by Git
 !.gitignore
+
+# Adding 5G-LENA module in specific version to my repo
+!nr/
+!nr/**
+
+# Adding traci to enable sumo integration
+!traci/
+!traci/**
+
+# Adding traci-applications
+!traci-applications/
+!traci-applications/**
