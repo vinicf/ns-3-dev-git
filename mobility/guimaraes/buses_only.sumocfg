@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<configuration>
+    <input>
+        <net-file value="guimaraes.net.xml" />
+        <route-files value="buses.rou.xml" />
+        <additional-files value="vtypes.xml,ptstops.xml,buses.add.xml" />
+    </input>
+    <time>
+        <step-length value="1.0" />
+    </time>
+</configuration>
