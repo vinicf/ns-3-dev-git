@@ -451,32 +451,63 @@ class MecTrafficManager
                      const Address& from,
                      const Address& local)
     {
-        (void)mecNodeId;
         (void)local;
         if (!InetSocketAddress::IsMatchingType(from))
         {
             return;
         }
+        
         const Ipv4Address sourceAddress = InetSocketAddress::ConvertFrom(from).GetIpv4();
         auto ue = m_ueByAddress.find(sourceAddress.Get());
-        if (ue == m_ueByAddress.end())
-        {
-            return;
-        }
+        if (ue == m_ueByAddress.end()) return;
+
         auto context = g_ueContexts.find(ue->second);
-        if (context == g_ueContexts.end())
+        if (context == g_ueContexts.end()) return;
+
+        // 1. Identificar se a origem é inter-zona (Penalidade Topológica no Plano de Dados)
+        bool isLocalZone = false;
+        const MecServer& receivingMec = GetServer(mecNodeId);
+        std::string currentServingCell = std::to_string(context->second.servingCellId);
+        
+        if (std::find(receivingMec.primaryGnbCellIds.begin(), 
+                      receivingMec.primaryGnbCellIds.end(), 
+                      currentServingCell) != receivingMec.primaryGnbCellIds.end()) 
         {
-            return;
+            isLocalZone = true;
         }
+
+        // Se for de outra zona, o pacote demora mais 10ms a atravessar a rede de transporte metropolitana
+        double topologicalDelayMs = isLocalZone ? 0.0 : 10.0;
+
+        // 2. Agendar o processamento real do pacote no tempo simulado para refletir o atraso da fibra
+        if (topologicalDelayMs > 0.0) {
+            Simulator::Schedule(MilliSeconds(topologicalDelayMs), 
+                                &MecTrafficManager::ProcessDelayedPacket, 
+                                this, mecNodeId, packet->Copy(), ue->second);
+        } else {
+            ProcessDelayedPacket(mecNodeId, packet, ue->second);
+        }
+    }
+
+    // Novo método auxiliar para processar o pacote após o atraso físico ter decorrido
+    void
+    ProcessDelayedPacket(uint32_t mecNodeId, Ptr<const Packet> packet, uint32_t ueNodeId)
+    {
+        (void)mecNodeId;
+        auto context = g_ueContexts.find(ueNodeId);
+        if (context == g_ueContexts.end()) return;
+
         ++context->second.rxPackets;
+        
         if (ClassifyVehicle(context->second.vehicleType) != "bus")
         {
             Ptr<Packet> copy = packet->Copy();
             SeqTsHeader header;
             if (copy->RemoveHeader(header) > 0)
             {
-                context->second.lastLatencyMs =
-                    (Simulator::Now() - header.GetTs()).GetMilliSeconds();
+                // Agora o Simulator::Now() reflete o instante real de chegada,
+                // englobando o atraso extra da rede de transporte metropolitana.
+                context->second.lastLatencyMs = (Simulator::Now() - header.GetTs()).GetMilliSeconds();
             }
         }
     }
@@ -742,16 +773,24 @@ ActivateVehicleTraffic(Ptr<TraciClient> client,
                                  vehicleClass,
                                  initialMecNodeId,
                                  duration);
-    // Providing generic demands: 4 Cores, 8GB RAM, 20Mbps BW, 5MB State Size
+    double reqCpu = 0.5, reqRam = 1.0, reqBw = 0.024;
+    uint32_t stateSize = 1024 * 1024; // 1MB estado base
+
+    if (vehicleClass == "bus") {
+        reqCpu = 2.0; reqRam = 4.0; reqBw = 2.5; stateSize = 5 * 1024 * 1024;
+    } else if (vehicleClass == "bicycle") {
+        reqCpu = 0.1; reqRam = 0.2; reqBw = 0.001; stateSize = 256 * 1024;
+    }
+
     orchestrator->RegisterUe(
         nodeId, 
         context.ipv4Address, 
-        4.0, 8.0, 20.0, 
-        5 * 1024 * 1024, // 5MB state size 
+        reqCpu, reqRam, reqBw, 
+        stateSize, 
         node, 
         initialMecNodeId, 
         vehicleClass
-    );                                 
+    );
 
     if (g_servingCell.count(context.imsi))
     {
@@ -867,6 +906,7 @@ main(int argc, char* argv[])
     double demoMigrationAt = -1.0;
     std::string mecStrategy = "spatial";
     double mdmkpInterval = 1.0;
+    bool fastChannel = false;
 
     CommandLine command(__FILE__);
     command.AddValue("sumoConfig", "SUMO configuration to run through TraCI", sumoConfig);
@@ -882,7 +922,14 @@ main(int argc, char* argv[])
     command.AddValue("demoMigrationAt", "Optional time in seconds to demonstrate MEC_0 -> MEC_1 redirect", demoMigrationAt);
     command.AddValue("mecStrategy", "MEC allocation/migration strategy: 'spatial' or 'mdmkp'", mecStrategy);
     command.AddValue("mdmkpInterval", "Optimization interval in seconds for MDMKP orchestrator", mdmkpInterval);
+    command.AddValue("fastChannel", "Enable fast macroscopic channel modeling (AlwaysLos, no shadowing, 100ms updates)", fastChannel);
     command.Parse(argc, argv);
+
+    if (fastChannel)
+    {
+        Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(100)));
+        Config::SetDefault("ns3::ThreeGppChannelConditionModel::UpdatePeriod", TimeValue(MilliSeconds(100)));
+    }
 
     NS_ABORT_MSG_IF(mecStrategy != "spatial" && mecStrategy != "mdmkp", "mecStrategy must be 'spatial' or 'mdmkp'");
     bool doSpatialRouting = (mecStrategy == "spatial");
@@ -1020,12 +1067,14 @@ main(int argc, char* argv[])
     // 1. Instantiate the MDMKP Orchestrator
     Ptr<MecOrchestrator> orchestrator = CreateObject<MecOrchestrator>();
     orchestrator->SetOptimizationInterval(mdmkpInterval);
-    // 2. Register MEC Servers with static capacities (e.g., 32 Cores, 64GB RAM, 10Gbps Bandwidth)
+    // 2. Register MEC Servers with JSON parsed capacities
     for (auto& server : mecServers) {
         orchestrator->RegisterMecServer(
             server.node->GetId(), 
             server.ipv4Address, 
-            32.0, 64.0, 10000.0, 
+            server.vcpus,            // Usa o valor real do JSON
+            server.ramGb,            // Usa o valor real do JSON
+            server.dataRateBps / 1000000.0, // Converte bps para Mbps
             server.node
         );
     }
@@ -1037,6 +1086,7 @@ main(int argc, char* argv[])
 
     Ptr<IdealBeamformingHelper> beamformingHelper = CreateObject<IdealBeamformingHelper>();
     Ptr<NrHelper> nrHelper = CreateObject<NrHelper>();
+    nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerOfdmaPF"));
     Ptr<NrChannelHelper> channelHelper = CreateObject<NrChannelHelper>();
     nrHelper->SetBeamformingHelper(beamformingHelper);
     nrHelper->SetEpcHelper(epcHelper);
@@ -1049,9 +1099,17 @@ main(int argc, char* argv[])
     nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(8));
     nrHelper->SetGnbPhyAttribute("TxPower", DoubleValue(46.0));
 
-    channelHelper->ConfigureFactories("UMa", "Default", "ThreeGpp");
-    channelHelper->SetChannelConditionModelAttribute("UpdatePeriod", TimeValue(MilliSeconds(100)));
-    channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(true));
+    if (fastChannel)
+    {
+        channelHelper->ConfigureFactories("UMa", "LOS", "ThreeGpp");
+        channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(false));
+    }
+    else
+    {
+        channelHelper->ConfigureFactories("UMa", "Default", "ThreeGpp");
+        channelHelper->SetChannelConditionModelAttribute("UpdatePeriod", TimeValue(MilliSeconds(100)));
+        channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(true));
+    }
     CcBwpCreator bwpCreator;
     CcBwpCreator::SimpleOperationBandConf bandConfiguration(3.5e9, 40e6, 1);
     OperationBandInfo band = bwpCreator.CreateOperationBandContiguousCc(bandConfiguration);
@@ -1160,7 +1218,7 @@ main(int argc, char* argv[])
         Config::Connect(tracePath.str() + "HandoverEndOk", MakeCallback(&HandoverCompleted));
 
         NrHelper::GetUePhy(ueDevice, 0)->TraceConnectWithoutContext(
-            "DlDataSinr",
+            "DlCtrlSinr",
             MakeBoundCallback(&UeDlSinr, node->GetId()));
     }
 

@@ -103,7 +103,8 @@ std::vector<MigrationDecision> MecOrchestrator::SolveMDMKP() {
     };
     std::vector<CandidateAssignment> candidates;
 
-    const double EPSILON = 1e-6;
+    // Define a maximum latency threshold (e.g., 40.0 ms) to match the Python L_max
+    const double L_MAX = 40.0;
 
     // Build the pseudo-utility and efficiency tables for all UE-MEC pairs
     for (auto& uePair : m_activeUes) {
@@ -114,17 +115,16 @@ std::vector<MigrationDecision> MecOrchestrator::SolveMDMKP() {
             uint32_t mecId = mecPair.first;
             MecServerInfo& mec = mecPair.second;
             
-            // Objective Function: max( 1000 / (L_ij + 1) - beta * Migration_Indicator )
+            // 1. ALIGNED UTILITY: L_max - Latency - Penalty
             double L_ij = EstimateLatency(ueId, mecId);
             double migrationPenalty = (mecId != ue.currentMecNodeId) ? m_betaPenalty : 0.0;
-            double U_ij = (1000.0 / (L_ij + 1.0)) - migrationPenalty;
+            double U_ij = L_MAX - L_ij - migrationPenalty;
             
-            // Resource Fraction: Aggregate Multidimensional Resource Impact (Toyoda's concept)
-            double availCpu = std::max(EPSILON, mec.cpuTotal - mec.cpuUsed);
-            double availRam = std::max(EPSILON, mec.ramTotal - mec.ramUsed);
-            double availBw  = std::max(EPSILON, mec.bwTotal - mec.bwUsed);
-            
-            double R_ij = (ue.cpuReq / availCpu) + (ue.ramReq / availRam) + (ue.bwReq / availBw);
+            // 2. STATIC DENOMINATORS: Use Total capacity for a stable static sort
+            double R_ij = (ue.cpuReq / mec.cpuTotal) + 
+                          (ue.ramReq / mec.ramTotal) + 
+                          (ue.bwReq / mec.bwTotal);
+                          
             double E_ij = U_ij / R_ij;
             
             candidates.push_back({ueId, mecId, E_ij, U_ij, R_ij});
@@ -142,6 +142,9 @@ std::vector<MigrationDecision> MecOrchestrator::SolveMDMKP() {
     // Sequentially lock in the best choices that don't violate constraints
     for (const auto& cand : candidates) {
         if (assignedUes[cand.ueId]) continue; // Already mapped this cycle
+        
+        // 3. NEGATIVE UTILITY GUARD: Do not assign if it actively harms the network
+        if (cand.utility <= 0) continue;
         
         MecServerInfo& mec = m_mecServers[cand.mecId];
         UeServiceContext& ue = m_activeUes[cand.ueId];
