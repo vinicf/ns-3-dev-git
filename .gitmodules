@@ -1,0 +1,3 @@
+[submodule "contrib/nr"]
+	path = contrib/nr
+	url = https://gitlab.com/cttc-lena/nr.git
