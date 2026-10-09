@@ -84,3 +84,44 @@ No gráfico inferior (amarelo), monitorizámos o volume de "Travessias de Fronte
 * Identificámos **130 Eventos de Migração** físicos durante os 60 minutos do cenário base.
 * As migrações não são uniformes. Existem picos fortes nos minutos 10 e 40 que coincidem perfeitamente com a chegada massiva dos automóveis pela zona do MEC_2 e que, ao deslocarem-se transversalmente pela cidade para o MEC_1, desencadeiam _handovers_ em cascata.
 * **Coerência do Cenário:** Este volume de mobilidade confirma que as zonas MEC estão muito bem dimensionadas. Guimarães é uma cidade com forte mobilidade de passagem; os 130 _handovers_ provam que os UEs não estão estáticos. O orquestrador será sujeito à difícil tarefa de decidir se vale a pena migrar o estado (incorrendo na penalidade de latência calculada na topologia) ou se mantém a app ancorada no servidor de origem enquanto o veículo viaja pela cidade.
+
+## Avaliação Analítica: Limite Superior Teórico (MDMKP)
+
+Para validar a eficiência e a correção da heurística de orquestração implementada no simulador de redes (ns-3), foi desenvolvido um modelo matemático analítico correspondente (`mdmkp-orchestrator-eval.py`). Este script utiliza o solver `HiGHS` (via biblioteca `PuLP`) para calcular o resultado ótimo absoluto do cenário antes da introdução da estocasticidade do rádio e da mobilidade.
+
+### 1. Formulação do Cenário Testado
+O modelo traduz matematicamente as exatas restrições físicas e demográficas testadas na simulação C++:
+- **Capacidade dos Nódulos (MECs):** 3 nós baseados no perfil Lenovo ThinkEdge SE30 (8 vCPUs, 16 GB de RAM, 1 Gbps de Data Rate). Resulta numa capacidade global de 24 vCPUs.
+- **Procura (Demografia Golden Ratio):** Um total de 36 viaturas simultâneas configuradas para levar o sistema a uma carga limite de saturação (~95.8%), evitando a rejeição massiva ao mesmo tempo que força um empacotamento inteligente de recursos:
+    - 6 Autocarros (2.0 vCPU, 4.0 GB RAM)
+    - 20 Carros (0.5 vCPU, 1.0 GB RAM)
+    - 10 Bicicletas (0.1 vCPU, 0.2 GB RAM)
+- **Função Objetivo:** Maximizar a poupança global de latência $\sum (L_{max} - L_{ij}) \cdot x_{ij}$, em que $L_{max} = 40.0$ ms e $x_{ij}$ é a variável de decisão binária que dita se a viatura $i$ será processada no MEC $j$.
+
+### 2. Solução Exata (ILP) vs. Relaxação Contínua (LP)
+Para avaliar a qualidade do empacotamento, o script resolve o problema em duas vertentes matemáticas:
+1. **ILP Exato (Integer Linear Programming):** Cada aplicação só pode ser atribuída de forma estrita e inteira (0 ou 1) a um MEC. Retorna o teto ótimo realizável no mundo real.
+2. **Relaxação Contínua (Fractional Upper Bound):** Remove a restrição binária, permitindo que os recursos das aplicações sejam fragmentados (ex: 30% de um carro processado no MEC_0 e 70% no MEC_1) para aproveitar até à última décima de vCPU desperdiçada nos três servidores. Embora impossível do ponto de vista de rede prática, este resultado serve como um Teto Teórico Matemático Incontestável (*Theoretical Upper Bound*).
+
+### 3. Análise de Resultados
+A execução do modelo LP/ILP retornou as seguintes métricas base:
+
+```text
+[1] ILP Exact Solution (Realistic Assignment)
+Status: Optimal
+Total Latency Savings: 1302.25 ms
+Services Admitted to Edge: 36 / 36
+  - MEC_0 Load: vCPU   7.7/8.0 | RAM  15.4/16.0 | BW   5.2/1000.0
+  - MEC_1 Load: vCPU   7.7/8.0 | RAM  15.4/16.0 | BW   5.2/1000.0
+  - MEC_2 Load: vCPU   7.6/8.0 | RAM  15.2/16.0 | BW   5.2/1000.0
+
+[2] LP Fractional Relaxation (Theoretical Upper Bound)
+Status: Optimal
+Total Latency Savings: 1313.03 ms
+Efficiency Gap (Exact vs Bound): 99.18%
+```
+
+**Conclusões Retiradas:**
+1. **Saturação Perfeita:** A carga requerida (23.0 vCPUs) encaixou de forma exímia nas capacidades limitadas dos MECs (7.7, 7.7 e 7.6 utilizados em 8.0 disponíveis por servidor). Esta distribuição comprova que o rácio de tráfego escolhido é excelente para provocar concorrência extrema de CPU, obrigando a migrações sem cair numa falha global de admissão.
+2. **Margem Heurística (O Teto):** O limite matemático contínuo provou que, mesmo num cenário absurdo de fragmentação perfeita das aplicações sobre a rede, o ganho máximo adicional na poupança de latência seria de apenas ~10.78 ms sumariados entre as 36 viaturas. 
+3. **Validação do ns-3:** O rácio de eficiência de **99.18%** da Solução Exata (ILP) estabelece a âncora matemática de avaliação. Uma vez que as métricas do simulador C++ ns-3 (MDMKP de 1s, 10s e 30s) gerem latências num ambiente dinâmico com penalizações de migração (*downtime*) e perdas rádio, os resultados finais a recolher servirão para ser comparados diretamente em percentagem contra estes `1313.03 ms`. O desvio em relação ao *Upper Bound* permitirá quantificar diretamente o custo computacional que a mobilidade veicular introduz.
