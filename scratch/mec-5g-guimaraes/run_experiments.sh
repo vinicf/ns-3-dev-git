@@ -17,13 +17,20 @@ FAST_CHANNEL="true"
 
 NUM_RUNS=5
 
-# Determine Number of Concurrent Jobs
+# Determine Number of Concurrent Jobs (Safe by CPU and RAM)
 CORES=$(nproc 2>/dev/null || echo 4)
-# Limits the maximum concurrent jobs to the number of CPU cores available (leaves 1 for OS stability if > 2)
-if [ "$CORES" -gt 2 ]; then
-    MAX_JOBS=$((CORES - 1))
+MEM_GB=$(free -g | awk '/^Mem:/{print $2}' 2>/dev/null || echo 4)
+
+# 5G-LENA uses ~1.5 GB to 2.0 GB of RAM per instance. 
+# We limit the max jobs based on available RAM to prevent OOM Killer.
+SAFE_JOBS_BY_RAM=$((MEM_GB / 2))
+[ "$SAFE_JOBS_BY_RAM" -lt 1 ] && SAFE_JOBS_BY_RAM=1
+
+if [ "$CORES" -gt "$SAFE_JOBS_BY_RAM" ]; then
+    MAX_JOBS=$SAFE_JOBS_BY_RAM
+    echo ">>> Capping concurrent jobs to $MAX_JOBS due to RAM limits (${MEM_GB}GB total) to prevent OOM."
 else
-    MAX_JOBS=$CORES
+    MAX_JOBS=$((CORES > 1 ? CORES - 1 : 1))
 fi
 
 BASE_ARGS="--sumoConfig=$SUMO_CONFIG "
@@ -48,7 +55,7 @@ echo " Starting ns-3 MEC Experiments Batch (PARALLEL)"
 echo " Total Scenarios: ${#scenarios[@]}"
 echo " Runs per Scenario: $NUM_RUNS"
 echo " Total Executions: $((${#scenarios[@]} * NUM_RUNS))"
-echo " Concurrent Workers: $MAX_JOBS (Based on CPU Cores)"
+echo " Concurrent Workers: $MAX_JOBS"
 echo "=================================================="
 
 # 1. Build beforehand to prevent parallel lock collisions in waf/ninja
@@ -58,7 +65,6 @@ echo ">>> Building ns-3 core..."
 echo ">>> Launching simulations..."
 echo ""
 
-# Function to run a single experiment
 run_experiment() {
     local strategy=$1
     local interval=$2
@@ -71,7 +77,6 @@ run_experiment() {
     
     echo "    [START] $folder | Run: $run/$NUM_RUNS | Seed: $run"
 
-    # --no-build is CRUCIAL here to avoid ninja lock crashes during parallel execution
     ./ns3 run --no-build "mec-5g-guimaraes ${BASE_ARGS} --mecStrategy=${strategy} --mdmkpInterval=${interval} --outputDirectory=${OUTPUT_DIR} --sumoPort=${port}" -- --RngRun=$run > "${OUTPUT_DIR}/stdout.log" 2>&1
 
     if [ $? -eq 0 ]; then
@@ -81,7 +86,6 @@ run_experiment() {
     fi
 }
 
-# 2. Parallel Queue System
 jobs_running=0
 port_offset=0
 
@@ -89,22 +93,17 @@ for scenario in "${scenarios[@]}"; do
     read -r strategy interval folder <<< "$scenario"
     for run in $(seq 1 $NUM_RUNS); do
         
-        # Launch job in background
         run_experiment "$strategy" "$interval" "$folder" "$run" "$((3400 + port_offset))" &
         ((port_offset++))
         
         ((jobs_running++))
-        
-        # If we reached the maximum concurrent jobs, wait for at least one to finish
         if [[ $jobs_running -ge $MAX_JOBS ]]; then
             wait -n
             ((jobs_running--))
         fi
-        
     done
 done
 
-# Wait for all remaining background jobs to complete
 wait
 
 echo ""
