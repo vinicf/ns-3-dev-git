@@ -918,6 +918,8 @@ main(int argc, char* argv[])
     command.AddValue("maxCars", "Maximum simultaneous 5G connected cars", g_maxCars);
     command.AddValue("maxBuses", "Maximum simultaneous 5G connected buses", g_maxBuses);
     command.AddValue("maxBicycles", "Maximum simultaneous 5G connected bicycles", g_maxBicycles);
+    uint32_t sumoPort = 3400;
+    command.AddValue("sumoPort", "Port for SUMO TraCI TCP communication", sumoPort);
     command.AddValue("sumoStartTime", "SUMO absolute begin time in seconds", sumoStartTime);
     command.AddValue("demoMigrationAt", "Optional time in seconds to demonstrate MEC_0 -> MEC_1 redirect", demoMigrationAt);
     command.AddValue("mecStrategy", "MEC allocation/migration strategy: 'spatial' or 'mdmkp'", mecStrategy);
@@ -1237,7 +1239,7 @@ main(int argc, char* argv[])
     g_traciClient->SetAttribute("SynchInterval", TimeValue(MilliSeconds(100)));
     g_traciClient->SetAttribute("StartTime", TimeValue(Seconds(sumoStartTime)));
     g_traciClient->SetAttribute("SumoGUI", BooleanValue(false));
-    g_traciClient->SetAttribute("SumoPort", UintegerValue(3400));
+    g_traciClient->SetAttribute("SumoPort", UintegerValue(sumoPort));
     g_traciClient->SetAttribute("PenetrationRate", DoubleValue(1.0));
     g_traciClient->SetAttribute("SumoLogFile", BooleanValue(true));
     g_traciClient->SetAttribute("SumoStepLog", BooleanValue(false));

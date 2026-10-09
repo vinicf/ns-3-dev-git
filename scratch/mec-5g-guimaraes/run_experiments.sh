@@ -64,6 +64,7 @@ run_experiment() {
     local interval=$2
     local folder=$3
     local run=$4
+    local port=$5
 
     local OUTPUT_DIR="results/${folder}/run_${run}"
     mkdir -p "$OUTPUT_DIR"
@@ -71,7 +72,7 @@ run_experiment() {
     echo "    [START] $folder | Run: $run/$NUM_RUNS | Seed: $run"
 
     # --no-build is CRUCIAL here to avoid ninja lock crashes during parallel execution
-    ./ns3 run --no-build "mec-5g-guimaraes ${BASE_ARGS} --mecStrategy=${strategy} --mdmkpInterval=${interval} --outputDirectory=${OUTPUT_DIR}" -- --RngRun=$run > "${OUTPUT_DIR}/stdout.log" 2>&1
+    ./ns3 run --no-build "mec-5g-guimaraes ${BASE_ARGS} --mecStrategy=${strategy} --mdmkpInterval=${interval} --outputDirectory=${OUTPUT_DIR} --sumoPort=${port}" -- --RngRun=$run > "${OUTPUT_DIR}/stdout.log" 2>&1
 
     if [ $? -eq 0 ]; then
         echo "    [ OK  ] $folder | Run: $run finished."
@@ -82,13 +83,15 @@ run_experiment() {
 
 # 2. Parallel Queue System
 jobs_running=0
+port_offset=0
 
 for scenario in "${scenarios[@]}"; do
     read -r strategy interval folder <<< "$scenario"
     for run in $(seq 1 $NUM_RUNS); do
         
         # Launch job in background
-        run_experiment "$strategy" "$interval" "$folder" "$run" &
+        run_experiment "$strategy" "$interval" "$folder" "$run" "$((3400 + port_offset))" &
+        ((port_offset++))
         
         ((jobs_running++))
         
