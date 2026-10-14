@@ -67,7 +67,20 @@ echo " Concurrent Workers: $MAX_JOBS"
 echo " Synchronization / Channel Interval: ${SYNCH_INTERVAL_MS}ms"
 echo "=================================================="
 
-# 1. Build beforehand to prevent parallel lock collisions in waf/ninja
+# 1. Clean up any stale SUMO processes from previous aborted runs
+echo ">>> Checking and cleaning up any stale SUMO processes on ports 3400+..."
+pkill -9 -f "sumo.*--remote-port" 2>/dev/null
+
+cleanup() {
+    echo ""
+    echo ">>> Interrupt received! Terminating background simulations and cleaning up SUMO..."
+    kill $(jobs -p) 2>/dev/null
+    pkill -9 -f "sumo.*--remote-port" 2>/dev/null
+    exit 1
+}
+trap cleanup SIGINT SIGTERM
+
+# 2. Build beforehand to prevent parallel lock collisions in waf/ninja
 echo ">>> Building ns-3 core..."
 ./ns3 build
 
