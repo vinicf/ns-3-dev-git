@@ -314,9 +314,15 @@ namespace ns3
             libsumo::TraCIPosition pos(this->TraCIAPI::vehicle.getPosition(veh));
 
             // get corresponding ns3 node from map
-            Ptr<MobilityModel> mob = m_vehicleNodeMap.at(veh)->GetObject<MobilityModel>();
-            // set ns3 node position with user defined altitude
-            mob->SetPosition(Vector(pos.x, pos.y, m_altitude));
+            Ptr<Node> node = it->second;
+            if (node)
+              {
+                Ptr<MobilityModel> mob = node->GetObject<MobilityModel>();
+                if (mob)
+                  {
+                    mob->SetPosition(Vector(pos.x, pos.y, m_altitude));
+                  }
+              }
           }
       }
     catch (std::exception& e)
@@ -417,7 +423,10 @@ namespace ns3
                 Ptr<ns3::Node> exNode = m_vehicleNodeMap.at(veh);
 
                 // call exclude function for this node
-                m_excludeNode(exNode);
+                if (exNode)
+                  {
+                    m_excludeNode(exNode);
+                  }
 
                 // unregister in map
                 m_vehicleNodeMap.erase(veh);
@@ -427,8 +436,11 @@ namespace ns3
                 // create new node by calling the include function
                 Ptr<ns3::Node> inNode = m_includeNode();
 
-                // register in the map (link vehicle to node!)
-                m_vehicleNodeMap.insert(std::pair<std::string, Ptr<Node>>(veh, inNode));
+                // register in the map if a valid node was allocated
+                if (inNode)
+                  {
+                    m_vehicleNodeMap.insert(std::pair<std::string, Ptr<Node>>(veh, inNode));
+                  }
               }
           }
       }

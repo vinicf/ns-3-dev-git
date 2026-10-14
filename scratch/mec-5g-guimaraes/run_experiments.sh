@@ -15,15 +15,20 @@ MAX_CARS=20
 MAX_BICYCLES=10
 FAST_CHANNEL="true"
 
-NUM_RUNS=5
+# Number of stochastic repetitions per scenario (RngRun: 1 .. NUM_RUNS)
+NUM_RUNS=10
+
+# Performance & Granularity Adjustments (500ms sync & channel update; disable heavy per-slot traces)
+SYNCH_INTERVAL_MS=500
+CHANNEL_UPDATE_PERIOD_MS=500
+ENABLE_PHY_TRACES="false"
 
 # Determine Number of Concurrent Jobs (Safe by CPU and RAM)
 CORES=$(nproc 2>/dev/null || echo 4)
 MEM_GB=$(free -g | awk '/^Mem:/{print $2}' 2>/dev/null || echo 4)
 
-# 5G-LENA uses ~1.5 GB to 2.0 GB of RAM per instance. 
-# We limit the max jobs based on available RAM to prevent OOM Killer.
-SAFE_JOBS_BY_RAM=$((MEM_GB / 2))
+# 5G-LENA uses ~1.2 GB to 1.5 GB of RAM per instance with reduced antenna dimensions and disabled PHY traces.
+SAFE_JOBS_BY_RAM=$((MEM_GB / 4))
 [ "$SAFE_JOBS_BY_RAM" -lt 1 ] && SAFE_JOBS_BY_RAM=1
 
 if [ "$CORES" -gt "$SAFE_JOBS_BY_RAM" ]; then
@@ -42,6 +47,9 @@ BASE_ARGS+="--maxBuses=$MAX_BUSES "
 BASE_ARGS+="--maxCars=$MAX_CARS "
 BASE_ARGS+="--maxBicycles=$MAX_BICYCLES "
 BASE_ARGS+="--fastChannel=$FAST_CHANNEL "
+BASE_ARGS+="--synchIntervalMs=$SYNCH_INTERVAL_MS "
+BASE_ARGS+="--channelUpdatePeriodMs=$CHANNEL_UPDATE_PERIOD_MS "
+BASE_ARGS+="--enablePhyTraces=$ENABLE_PHY_TRACES "
 
 scenarios=(
     "spatial 0 spatial_baseline"
@@ -56,6 +64,7 @@ echo " Total Scenarios: ${#scenarios[@]}"
 echo " Runs per Scenario: $NUM_RUNS"
 echo " Total Executions: $((${#scenarios[@]} * NUM_RUNS))"
 echo " Concurrent Workers: $MAX_JOBS"
+echo " Synchronization / Channel Interval: ${SYNCH_INTERVAL_MS}ms"
 echo "=================================================="
 
 # 1. Build beforehand to prevent parallel lock collisions in waf/ninja
@@ -75,7 +84,7 @@ run_experiment() {
     local OUTPUT_DIR="results/${folder}/run_${run}"
     mkdir -p "$OUTPUT_DIR"
     
-    echo "    [START] $folder | Run: $run/$NUM_RUNS | Seed: $run"
+    echo "    [START] $folder | Run: $run/$NUM_RUNS | Seed: $run (Port: $port)"
 
     ./ns3 run --no-build "mec-5g-guimaraes ${BASE_ARGS} --mecStrategy=${strategy} --mdmkpInterval=${interval} --outputDirectory=${OUTPUT_DIR} --sumoPort=${port}" -- --RngRun=$run > "${OUTPUT_DIR}/stdout.log" 2>&1
 

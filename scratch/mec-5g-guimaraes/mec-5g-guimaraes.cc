@@ -908,6 +908,14 @@ main(int argc, char* argv[])
     double mdmkpInterval = 1.0;
     bool fastChannel = false;
 
+    double synchIntervalMs = 500.0;
+    double channelUpdatePeriodMs = 500.0;
+    bool enablePhyTraces = false;
+    uint32_t gnbAntennaRows = 2;
+    uint32_t gnbAntennaColumns = 4;
+    uint32_t ueAntennaRows = 1;
+    uint32_t ueAntennaColumns = 2;
+
     CommandLine command(__FILE__);
     command.AddValue("sumoConfig", "SUMO configuration to run through TraCI", sumoConfig);
     command.AddValue("gnbPositions", "OpenCellID positions projected into SUMO XY", gnbPositions);
@@ -925,13 +933,17 @@ main(int argc, char* argv[])
     command.AddValue("mecStrategy", "MEC allocation/migration strategy: 'spatial' or 'mdmkp'", mecStrategy);
     command.AddValue("mdmkpInterval", "Optimization interval in seconds for MDMKP orchestrator", mdmkpInterval);
     command.AddValue("fastChannel", "Enable fast macroscopic channel modeling (AlwaysLos, no shadowing, 100ms updates)", fastChannel);
+    command.AddValue("synchIntervalMs", "SUMO/TraCI mobility synchronization interval in milliseconds", synchIntervalMs);
+    command.AddValue("channelUpdatePeriodMs", "3GPP channel condition and model update period in milliseconds", channelUpdatePeriodMs);
+    command.AddValue("enablePhyTraces", "Enable low-level slot-by-slot PHY and MAC scheduler traces (large files, slower)", enablePhyTraces);
+    command.AddValue("gnbAntennaRows", "Number of rows in gNB antenna array", gnbAntennaRows);
+    command.AddValue("gnbAntennaColumns", "Number of columns in gNB antenna array", gnbAntennaColumns);
+    command.AddValue("ueAntennaRows", "Number of rows in UE antenna array", ueAntennaRows);
+    command.AddValue("ueAntennaColumns", "Number of columns in UE antenna array", ueAntennaColumns);
     command.Parse(argc, argv);
 
-    if (fastChannel)
-    {
-        Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(100)));
-        Config::SetDefault("ns3::ThreeGppChannelConditionModel::UpdatePeriod", TimeValue(MilliSeconds(100)));
-    }
+    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(channelUpdatePeriodMs)));
+    Config::SetDefault("ns3::ThreeGppChannelConditionModel::UpdatePeriod", TimeValue(MilliSeconds(channelUpdatePeriodMs)));
 
     NS_ABORT_MSG_IF(mecStrategy != "spatial" && mecStrategy != "mdmkp", "mecStrategy must be 'spatial' or 'mdmkp'");
     bool doSpatialRouting = (mecStrategy == "spatial");
@@ -995,7 +1007,6 @@ main(int argc, char* argv[])
         mecServers.push_back(std::move(server));
     }
 
-    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(100)));
     Config::SetDefault("ns3::NrBearerStatsCalculator::DlRlcOutputFilename",
                        StringValue((absoluteOutputDirectory / "nr_rlc_dl.tsv").string()));
     Config::SetDefault("ns3::NrBearerStatsCalculator::UlRlcOutputFilename",
@@ -1095,10 +1106,10 @@ main(int argc, char* argv[])
     beamformingHelper->SetAttribute("BeamformingMethod",
                                     TypeIdValue(DirectPathBeamforming::GetTypeId()));
     nrHelper->SetGnbPhyAttribute("Numerology", UintegerValue(1));
-    nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(2));
-    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(4));
-    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(4));
-    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(8));
+    nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(ueAntennaRows));
+    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(ueAntennaColumns));
+    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(gnbAntennaRows));
+    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(gnbAntennaColumns));
     nrHelper->SetGnbPhyAttribute("TxPower", DoubleValue(46.0));
 
     if (fastChannel)
@@ -1109,7 +1120,7 @@ main(int argc, char* argv[])
     else
     {
         channelHelper->ConfigureFactories("UMa", "Default", "ThreeGpp");
-        channelHelper->SetChannelConditionModelAttribute("UpdatePeriod", TimeValue(MilliSeconds(100)));
+        channelHelper->SetChannelConditionModelAttribute("UpdatePeriod", TimeValue(MilliSeconds(channelUpdatePeriodMs)));
         channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(true));
     }
     CcBwpCreator bwpCreator;
@@ -1224,19 +1235,22 @@ main(int argc, char* argv[])
             MakeBoundCallback(&UeDlSinr, node->GetId()));
     }
 
-    Ptr<NrPhyRxTrace> phyTrace = nrHelper->GetPhyRxTrace();
-    phyTrace->SetResultsFolder(absoluteOutputDirectory.string() + "/");
-    phyTrace->SetSimTag("mec-guimaraes");
-    nrHelper->EnableDlDataPhyTraces();
-    nrHelper->EnableUlPhyTraces();
-    nrHelper->EnableRlcE2eTraces();
-    nrHelper->EnableDlMacSchedTraces();
-    nrHelper->EnableUlMacSchedTraces();
+    if (enablePhyTraces)
+    {
+        Ptr<NrPhyRxTrace> phyTrace = nrHelper->GetPhyRxTrace();
+        phyTrace->SetResultsFolder(absoluteOutputDirectory.string() + "/");
+        phyTrace->SetSimTag("mec-guimaraes");
+        nrHelper->EnableDlDataPhyTraces();
+        nrHelper->EnableUlPhyTraces();
+        nrHelper->EnableRlcE2eTraces();
+        nrHelper->EnableDlMacSchedTraces();
+        nrHelper->EnableUlMacSchedTraces();
+    }
 
     g_traciClient = CreateObject<TraciClient>();
     g_traciClient->SetAttribute("SumoConfigPath", StringValue(absoluteSumoConfig.string()));
     g_traciClient->SetAttribute("SumoBinaryPath", StringValue(""));
-    g_traciClient->SetAttribute("SynchInterval", TimeValue(MilliSeconds(100)));
+    g_traciClient->SetAttribute("SynchInterval", TimeValue(MilliSeconds(synchIntervalMs)));
     g_traciClient->SetAttribute("StartTime", TimeValue(Seconds(sumoStartTime)));
     g_traciClient->SetAttribute("SumoGUI", BooleanValue(false));
     g_traciClient->SetAttribute("SumoPort", UintegerValue(sumoPort));
@@ -1266,12 +1280,12 @@ main(int argc, char* argv[])
         StopVehicleTraffic(node, &mecTrafficManager, orchestrator);
     };
 
-    NS_LOG_UNCOND("NR configuration: band n78 3.5GHz, 40MHz, numerology 1, UMa/3GPP TR 38.901, channel update 100ms");
+    NS_LOG_UNCOND("NR configuration: band n78 3.5GHz, 40MHz, numerology 1, UMa/3GPP TR 38.901, channel update " << channelUpdatePeriodMs << "ms");
     NS_LOG_UNCOND("Multi-MEC topology loaded with " << mecNodes.GetN()
                                                       << " servers; UDP/TCP port " << mecUdpPort
                                                       << "; PGW backhaul 10Gbps with per-MEC delay");
     NS_LOG_UNCOND("OpenCellID NOS logical cells loaded as gNB candidates: " << g_gnbSites.size());
-    NS_LOG_UNCOND("Starting SUMO/TraCI for " << duration << " s with 100ms synchronization");
+    NS_LOG_UNCOND("Starting SUMO/TraCI for " << duration << " s with " << synchIntervalMs << "ms synchronization");
     g_traciClient->SumoSetup(includeNode, excludeNode);
 
     const double updateInterval = std::min(metricsInterval, migrationInterval);
