@@ -4,6 +4,11 @@
 # NS-3 Experiment Runner: MDMKP Orchestration vs Spatial Edge Routing (PARALLEL)
 # ==============================================================================
 
+# Ensure execution happens from the ns-3 root directory
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+NS3_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$NS3_ROOT" || exit 1
+
 # Common Parameters (Golden Ratio & Saturated Scenario)
 SUMO_CONFIG="mobility/guimaraes/guimaraes_saturated.sumocfg"
 GNB_POSITIONS="mobility/guimaraes/gnb_positions.json"
@@ -37,6 +42,8 @@ if [ "$CORES" -gt "$SAFE_JOBS_BY_RAM" ]; then
 else
     MAX_JOBS=$((CORES > 1 ? CORES - 1 : 1))
 fi
+
+MAX_JOBS=4
 
 BASE_ARGS="--sumoConfig=$SUMO_CONFIG "
 BASE_ARGS+="--gnbPositions=$GNB_POSITIONS "

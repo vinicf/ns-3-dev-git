@@ -232,6 +232,42 @@ class MecTrafficManager
         return FindClosestMec(gnbPosition);
     }
 
+    double
+    GetTopologicalDelayMs(uint32_t primaryMecNodeId, uint32_t targetMecNodeId) const
+    {
+        if (primaryMecNodeId == 0 || targetMecNodeId == 0 || targetMecNodeId == primaryMecNodeId)
+        {
+            return 0.0;
+        }
+
+        const MecServer& primaryMec = GetServer(primaryMecNodeId);
+        const MecServer& targetMec = GetServer(targetMecNodeId);
+        const double targetDist = CalculateDistance(primaryMec.position, targetMec.position);
+
+        // Find distance to the closest among the other external MEC host(s)
+        double otherDist = -1.0;
+        for (const auto& server : m_servers)
+        {
+            if (server.node->GetId() != primaryMecNodeId && server.node->GetId() != targetMecNodeId)
+            {
+                double d = CalculateDistance(primaryMec.position, server.position);
+                if (otherDist < 0.0 || d < otherDist)
+                {
+                    otherDist = d;
+                }
+            }
+        }
+
+        if (otherDist < 0.0 || targetDist <= otherDist)
+        {
+            return 3.0; // Closer external MEC host (1 hop across metro aggregation ring: +3.0 ms)
+        }
+        else
+        {
+            return 6.0; // More distant external MEC host (2 hops across metro core: +6.0 ms)
+        }
+    }
+
     void
     RegisterUe(Ptr<Node> node,
                Ipv4Address ueAddress,
@@ -464,22 +500,15 @@ class MecTrafficManager
         auto context = g_ueContexts.find(ue->second);
         if (context == g_ueContexts.end()) return;
 
-        // 1. Identificar se a origem é inter-zona (Penalidade Topológica no Plano de Dados)
-        bool isLocalZone = false;
-        const MecServer& receivingMec = GetServer(mecNodeId);
+        // 1. Identify primary/local MEC host for the UE
         std::string currentServingCell = std::to_string(context->second.servingCellId);
-        
-        if (std::find(receivingMec.primaryGnbCellIds.begin(), 
-                      receivingMec.primaryGnbCellIds.end(), 
-                      currentServingCell) != receivingMec.primaryGnbCellIds.end()) 
-        {
-            isLocalZone = true;
-        }
+        Vector uePos = context->second.node->GetObject<MobilityModel>()->GetPosition();
+        uint32_t primaryMecNodeId = FindPrimaryMec(currentServingCell, uePos);
 
-        // Se for de outra zona, o pacote demora mais 10ms a atravessar a rede de transporte metropolitana
-        double topologicalDelayMs = isLocalZone ? 0.0 : 10.0;
+        // 2. Realistic urban topological delay: 0ms (local), 3ms (closer external), 6ms (distant external)
+        double topologicalDelayMs = GetTopologicalDelayMs(primaryMecNodeId, mecNodeId);
 
-        // 2. Agendar o processamento real do pacote no tempo simulado para refletir o atraso da fibra
+        // 3. Schedule packet reception to reflect real metro transport delay
         if (topologicalDelayMs > 0.0) {
             Simulator::Schedule(MilliSeconds(topologicalDelayMs), 
                                 &MecTrafficManager::ProcessDelayedPacket, 
@@ -489,7 +518,7 @@ class MecTrafficManager
         }
     }
 
-    // Novo método auxiliar para processar o pacote após o atraso físico ter decorrido
+    // Process the packet after the physical delay has elapsed
     void
     ProcessDelayedPacket(uint32_t mecNodeId, Ptr<const Packet> packet, uint32_t ueNodeId)
     {
@@ -499,16 +528,12 @@ class MecTrafficManager
 
         ++context->second.rxPackets;
         
-        if (ClassifyVehicle(context->second.vehicleType) != "bus")
+        Ptr<Packet> copy = packet->Copy();
+        SeqTsHeader header;
+        if (copy->RemoveHeader(header) > 0)
         {
-            Ptr<Packet> copy = packet->Copy();
-            SeqTsHeader header;
-            if (copy->RemoveHeader(header) > 0)
-            {
-                // Agora o Simulator::Now() reflete o instante real de chegada,
-                // englobando o atraso extra da rede de transporte metropolitana.
-                context->second.lastLatencyMs = (Simulator::Now() - header.GetTs()).GetMilliSeconds();
-            }
+            // Simulator::Now() reflects the arrival instant including topological transport delay
+            context->second.lastLatencyMs = (Simulator::Now() - header.GetTs()).GetMilliSeconds();
         }
     }
 
@@ -526,14 +551,31 @@ class MecTrafficManager
     double
     GetLatencyEstimateMs(const UeContext& context, const MecServer& target) const
     {
-        double commonAccessLatencyMs = 1.0;
+        std::string currentServingCell = std::to_string(context.servingCellId);
+        Vector uePos = context.node->GetObject<MobilityModel>()->GetPosition();
+        uint32_t primaryMecNodeId = FindPrimaryMec(currentServingCell, uePos);
+
+        // 1. Identify topological delay currently experienced by active connection
+        double currentTopologicalDelayMs = 0.0;
+        if (context.currentMecNodeId != 0)
+        {
+            currentTopologicalDelayMs = GetTopologicalDelayMs(primaryMecNodeId, context.currentMecNodeId);
+        }
+
+        // 2. Extract clean 5G RAN access latency
+        double commonAccessLatencyMs = 4.0;
         if (std::isfinite(context.lastLatencyMs) && context.currentMecNodeId != 0)
         {
             const double currentBackhaulMs =
                 GetServer(context.currentMecNodeId).backhaulDelay.GetSeconds() * 1000.0;
-            commonAccessLatencyMs = std::max(0.0, context.lastLatencyMs - currentBackhaulMs);
+            commonAccessLatencyMs = std::max(0.5, context.lastLatencyMs - currentBackhaulMs - currentTopologicalDelayMs);
         }
-        return commonAccessLatencyMs + target.backhaulDelay.GetSeconds() * 1000.0;
+
+        // 3. Determine realistic topological delay to target MEC server (0ms local, 3ms closer, 6ms distant)
+        double targetTopologicalDelayMs = GetTopologicalDelayMs(primaryMecNodeId, target.node->GetId());
+        double targetBackhaulMs = target.backhaulDelay.GetSeconds() * 1000.0;
+
+        return commonAccessLatencyMs + targetBackhaulMs + targetTopologicalDelayMs;
     }
 
   public:
@@ -544,16 +586,15 @@ class MecTrafficManager
                          Time startTime,
                          Time stopTime)
     {
-        Address remote = InetSocketAddress(targetMecIp, m_port);
         ApplicationContainer apps;
 
         if (vehicleClass == "bus")
         {
-            OnOffHelper source("ns3::UdpSocketFactory", remote);
-            source.SetAttribute("DataRate", DataRateValue(DataRate("2.5Mbps")));
+            UdpClientHelper source(targetMecIp, m_port);
+            source.SetAttribute("MaxPackets", UintegerValue(0));
             source.SetAttribute("PacketSize", UintegerValue(1024));
-            source.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));
-            source.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
+            // 2.5 Mbps = 305 packets/sec of 1024 bytes -> ~3.2768 ms interval
+            source.SetAttribute("Interval", TimeValue(MilliSeconds(3.2768)));
             apps = source.Install(node);
         }
         else

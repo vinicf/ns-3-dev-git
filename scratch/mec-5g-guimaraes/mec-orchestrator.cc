@@ -70,18 +70,51 @@ double MecOrchestrator::EstimateLatency(uint32_t ueNodeId, uint32_t mecNodeId) {
     
     if (!ueMob || !mecMob) return 10.0; // Fallback latency
     
-    // 1. Calculate physical Euclidean distance
-    double distance = ueMob->GetDistanceFrom(mecMob);
+    // 1. Identify which MEC server is the closest / local zone host
+    uint32_t closestMecId = 0;
+    double minDistance = std::numeric_limits<double>::max();
+    for (const auto& mecPair : m_mecServers) {
+        Ptr<MobilityModel> mMob = mecPair.second.node->GetObject<MobilityModel>();
+        if (mMob) {
+            double d = ueMob->GetDistanceFrom(mMob);
+            if (d < minDistance) {
+                minDistance = d;
+                closestMecId = mecPair.first;
+            }
+        }
+    }
     
-    // 2. Propagation delay (Distance / Speed of Light) in milliseconds
-    double propDelayMs = (distance / 3e8) * 1000.0;
-    
-    // 3. Historical / Base RAN & Transport Delay (Approximating standard 5G RLC/MAC scheduler constraints)
-    // If we had a trace sink wired to DlDataSinr, we would map it here. For now we use standard heuristic constants.
+    // 2. Base 5G Access & Local Backhaul Delay
     double baseRanDelayMs = 4.0;
-    double backhaulQueuingDelayMs = 1.0; 
+    double localBackhaulMs = 1.5;
+
+    // 3. Metro Optical Transport Delay: 0.0 ms (local), 3.0 ms (closer neighbor), 6.0 ms (distant neighbor)
+    double interZoneMetroDelayMs = 0.0;
+    if (mecNodeId != closestMecId) {
+        Ptr<MobilityModel> localMecMob = m_mecServers[closestMecId].node->GetObject<MobilityModel>();
+        double targetDist = localMecMob ? localMecMob->GetDistanceFrom(mecMob) : 0.0;
+
+        double otherDist = -1.0;
+        for (const auto& mecPair : m_mecServers) {
+            if (mecPair.first != closestMecId && mecPair.first != mecNodeId) {
+                Ptr<MobilityModel> otherMob = mecPair.second.node->GetObject<MobilityModel>();
+                if (otherMob && localMecMob) {
+                    double d = localMecMob->GetDistanceFrom(otherMob);
+                    if (otherDist < 0.0 || d < otherDist) {
+                        otherDist = d;
+                    }
+                }
+            }
+        }
+
+        if (otherDist < 0.0 || targetDist <= otherDist) {
+            interZoneMetroDelayMs = 3.0; // Closer external MEC host (1 hop: +3.0 ms)
+        } else {
+            interZoneMetroDelayMs = 6.0; // More distant external MEC host (2 hops: +6.0 ms)
+        }
+    }
     
-    return propDelayMs + baseRanDelayMs + backhaulQueuingDelayMs;
+    return baseRanDelayMs + localBackhaulMs + interZoneMetroDelayMs;
 }
 
 std::vector<MigrationDecision> MecOrchestrator::SolveMDMKP() {
