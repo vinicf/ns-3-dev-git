@@ -57,6 +57,7 @@ BASE_ARGS+="--fastChannel=$FAST_CHANNEL "
 BASE_ARGS+="--synchIntervalMs=$SYNCH_INTERVAL_MS "
 BASE_ARGS+="--channelUpdatePeriodMs=$CHANNEL_UPDATE_PERIOD_MS "
 BASE_ARGS+="--enablePhyTraces=$ENABLE_PHY_TRACES "
+BASE_ARGS+="--SchedulerType=ns3::PriorityQueueScheduler "
 
 scenarios=(
     "spatial 0 spatial_baseline"

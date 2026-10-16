@@ -985,6 +985,7 @@ main(int argc, char* argv[])
 
     Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(channelUpdatePeriodMs)));
     Config::SetDefault("ns3::ThreeGppChannelConditionModel::UpdatePeriod", TimeValue(MilliSeconds(channelUpdatePeriodMs)));
+    Config::SetGlobal("SchedulerType", StringValue("ns3::PriorityQueueScheduler"));
 
     NS_ABORT_MSG_IF(mecStrategy != "spatial" && mecStrategy != "mdmkp", "mecStrategy must be 'spatial' or 'mdmkp'");
     bool doSpatialRouting = (mecStrategy == "spatial");
