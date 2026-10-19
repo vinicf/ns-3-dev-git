@@ -60,10 +60,10 @@ BASE_ARGS+="--enablePhyTraces=$ENABLE_PHY_TRACES "
 BASE_ARGS+="--SchedulerType=ns3::PriorityQueueScheduler "
 
 scenarios=(
-    "spatial 0 spatial_baseline"
-    "mdmkp 1 mdmkp_1s"
-    "mdmkp 10 mdmkp_10s"
-    "mdmkp 30 mdmkp_30s"
+    "mdmkp 10 0.0 mdmkp_10s_beta0"
+    "mdmkp 10 1.0 mdmkp_10s_beta1"
+    "mdmkp 10 2.5 mdmkp_10s_beta2.5"
+    "mdmkp 10 4.5 mdmkp_10s_beta4.5"
 )
 
 echo "=================================================="
@@ -98,16 +98,17 @@ echo ""
 run_experiment() {
     local strategy=$1
     local interval=$2
-    local folder=$3
-    local run=$4
-    local port=$5
+    local beta=$3
+    local folder=$4
+    local run=$5
+    local port=$6
 
     local OUTPUT_DIR="results/${folder}/run_${run}"
     mkdir -p "$OUTPUT_DIR"
     
-    echo "    [START] $folder | Run: $run/$NUM_RUNS | Seed: $run (Port: $port)"
+    echo "    [START] $folder (beta=$beta) | Run: $run/$NUM_RUNS | Seed: $run (Port: $port)"
 
-    ./ns3 run --no-build "mec-5g-guimaraes ${BASE_ARGS} --mecStrategy=${strategy} --mdmkpInterval=${interval} --outputDirectory=${OUTPUT_DIR} --sumoPort=${port}" -- --RngRun=$run > "${OUTPUT_DIR}/stdout.log" 2>&1
+    ./ns3 run --no-build "mec-5g-guimaraes ${BASE_ARGS} --mecStrategy=${strategy} --mdmkpInterval=${interval} --betaPenalty=${beta} --outputDirectory=${OUTPUT_DIR} --sumoPort=${port}" -- --RngRun=$run > "${OUTPUT_DIR}/stdout.log" 2>&1
 
     if [ $? -eq 0 ]; then
         echo "    [ OK  ] $folder | Run: $run finished."
@@ -120,10 +121,10 @@ jobs_running=0
 port_offset=0
 
 for scenario in "${scenarios[@]}"; do
-    read -r strategy interval folder <<< "$scenario"
+    read -r strategy interval beta folder <<< "$scenario"
     for run in $(seq 1 $NUM_RUNS); do
         
-        run_experiment "$strategy" "$interval" "$folder" "$run" "$((3400 + port_offset))" &
+        run_experiment "$strategy" "$interval" "$beta" "$folder" "$run" "$((3400 + port_offset))" &
         ((port_offset++))
         
         ((jobs_running++))

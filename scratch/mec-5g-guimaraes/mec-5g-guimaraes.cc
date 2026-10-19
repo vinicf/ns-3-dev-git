@@ -362,6 +362,19 @@ class MecTrafficManager
         return server->node->GetId();
     }
 
+    uint32_t
+    FindMecNodeByIp(Ipv4Address ip) const
+    {
+        auto server = std::find_if(m_servers.begin(), m_servers.end(), [ip](const MecServer& item) {
+            return item.ipv4Address == ip;
+        });
+        if (server != m_servers.end())
+        {
+            return server->node->GetId();
+        }
+        return 0;
+    }
+
     void
     PrintSummary() const
     {
@@ -973,6 +986,8 @@ main(int argc, char* argv[])
     command.AddValue("demoMigrationAt", "Optional time in seconds to demonstrate MEC_0 -> MEC_1 redirect", demoMigrationAt);
     command.AddValue("mecStrategy", "MEC allocation/migration strategy: 'spatial' or 'mdmkp'", mecStrategy);
     command.AddValue("mdmkpInterval", "Optimization interval in seconds for MDMKP orchestrator", mdmkpInterval);
+    double betaPenalty = 2.5;
+    command.AddValue("betaPenalty", "Migration penalty beta in ms for MDMKP orchestrator", betaPenalty);
     command.AddValue("fastChannel", "Enable fast macroscopic channel modeling (AlwaysLos, no shadowing, 100ms updates)", fastChannel);
     command.AddValue("synchIntervalMs", "SUMO/TraCI mobility synchronization interval in milliseconds", synchIntervalMs);
     command.AddValue("channelUpdatePeriodMs", "3GPP channel condition and model update period in milliseconds", channelUpdatePeriodMs);
@@ -1115,14 +1130,12 @@ main(int argc, char* argv[])
         mecRouting->SetDefaultRoute(interfaces.GetAddress(0), static_cast<uint32_t>(mecInterface));
         mecRouting->AddNetworkRouteTo(Ipv4Address("7.0.0.0"), Ipv4Mask("255.0.0.0"), interfaces.GetAddress(0), static_cast<uint32_t>(mecInterface));
     }
-    MecTrafficManager mecTrafficManager;
-    mecTrafficManager.Configure(std::move(mecServers), mecUdpPort);
-    mecTrafficManager.InstallPacketSinks(duration, mecTcpPort);
-
     // 1. Instantiate the MDMKP Orchestrator
     Ptr<MecOrchestrator> orchestrator = CreateObject<MecOrchestrator>();
     orchestrator->SetOptimizationInterval(mdmkpInterval);
-    // 2. Register MEC Servers with JSON parsed capacities
+    orchestrator->SetBetaPenalty(betaPenalty);
+
+    // 2. Register MEC Servers with JSON parsed capacities BEFORE std::move
     for (auto& server : mecServers) {
         orchestrator->RegisterMecServer(
             server.node->GetId(), 
@@ -1134,9 +1147,30 @@ main(int argc, char* argv[])
         );
     }
 
+    MecTrafficManager mecTrafficManager;
+    mecTrafficManager.Configure(std::move(mecServers), mecUdpPort);
+    mecTrafficManager.InstallPacketSinks(duration, mecTcpPort);
+
     // 3. Callback setup for downtime resumption
     orchestrator->SetAppMigrationCallback([&mecTrafficManager, duration](Ptr<Node> node, Ipv4Address targetIp, Time resumeTime) {
-        return mecTrafficManager.CreateUeApplication(node, "bus", targetIp, resumeTime, Seconds(duration));
+        uint32_t ueNodeId = node->GetId();
+        auto it = g_ueContexts.find(ueNodeId);
+        std::string vehicleClass = "bus";
+        if (it != g_ueContexts.end())
+        {
+            vehicleClass = ClassifyVehicle(it->second.vehicleType);
+            uint32_t targetMecNodeId = mecTrafficManager.FindMecNodeByIp(targetIp);
+            if (targetMecNodeId != 0)
+            {
+                it->second.currentMecNodeId = targetMecNodeId;
+            }
+        }
+        ApplicationContainer newApps = mecTrafficManager.CreateUeApplication(node, vehicleClass, targetIp, resumeTime, Seconds(duration));
+        if (it != g_ueContexts.end())
+        {
+            it->second.applications = newApps;
+        }
+        return newApps;
     });
 
     Ptr<IdealBeamformingHelper> beamformingHelper = CreateObject<IdealBeamformingHelper>();

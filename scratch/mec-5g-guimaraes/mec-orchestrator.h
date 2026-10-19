@@ -69,6 +69,7 @@ public:
     void RunOptimizationCycle();
 
     void SetOptimizationInterval(double interval);
+    void SetBetaPenalty(double beta);
 
     // Callback used to cleanly restart applications with a new destination IP after T_down elapses
     using AppMigrationCallback = std::function<ApplicationContainer(Ptr<Node>, Ipv4Address, Time)>;

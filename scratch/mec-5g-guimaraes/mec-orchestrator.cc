@@ -282,5 +282,9 @@ void MecOrchestrator::SetOptimizationInterval(double interval) {
     m_optimizationInterval = interval;
 }
 
+void MecOrchestrator::SetBetaPenalty(double beta) {
+    m_betaPenalty = beta;
+}
+
 } // namespace ns3
 
