@@ -843,7 +843,7 @@ ActivateVehicleTraffic(Ptr<TraciClient> client,
         stateSize, 
         node, 
         initialMecNodeId, 
-        vehicleClass
+        context.applications
     );
 
     if (g_servingCell.count(context.imsi))

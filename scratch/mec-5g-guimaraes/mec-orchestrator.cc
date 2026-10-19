@@ -238,7 +238,16 @@ void MecOrchestrator::ExecuteMigrations(const std::vector<MigrationDecision>& de
 
         // Pause active application transmission
         if (ue.applications.GetN() > 0) {
-            ue.applications.Stop(Simulator::Now());
+            bool hasValidApp = false;
+            for (uint32_t a = 0; a < ue.applications.GetN(); ++a) {
+                if (ue.applications.Get(a) != nullptr) {
+                    hasValidApp = true;
+                    break;
+                }
+            }
+            if (hasValidApp) {
+                ue.applications.Stop(Simulator::Now());
+            }
             ue.applications = ApplicationContainer();
         }
         
