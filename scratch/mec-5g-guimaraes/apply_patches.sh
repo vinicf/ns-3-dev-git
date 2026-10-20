@@ -18,6 +18,10 @@ if git apply --check --reverse "$PATCH_FILE" >/dev/null 2>&1; then
     echo ">> 5G-LENA safety patches are already applied."
 else
     echo ">> Applying 5G-LENA safety patches to contrib/nr..."
+    if ! git apply --check "$PATCH_FILE" >/dev/null 2>&1; then
+        echo ">> Detected partially modified files in contrib/nr; resetting to clean baseline..."
+        git checkout -- .
+    fi
     git apply "$PATCH_FILE"
     echo ">> Patches applied successfully."
 fi
