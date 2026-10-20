@@ -9,6 +9,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 NS3_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$NS3_ROOT" || exit 1
 
+# Apply 5G-LENA safety patches if needed
+if [ -f "$SCRIPT_DIR/apply_patches.sh" ]; then
+    bash "$SCRIPT_DIR/apply_patches.sh"
+fi
+
 # Common Parameters (Golden Ratio & Saturated Scenario)
 SUMO_CONFIG="mobility/guimaraes/guimaraes_saturated.sumocfg"
 GNB_POSITIONS="mobility/guimaraes/gnb_positions.json"

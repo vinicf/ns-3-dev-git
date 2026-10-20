@@ -277,7 +277,12 @@ class MecTrafficManager
     {
         m_duration = duration;
         const uint32_t nodeId = node->GetId();
-        UeContext& context = g_ueContexts.at(nodeId);
+        auto it = g_ueContexts.find(nodeId);
+        if (it == g_ueContexts.end())
+        {
+            return;
+        }
+        UeContext& context = it->second;
         const MecServer& server = GetServer(initialMecNodeId);
 
         Time startTime = Simulator::Now() + MilliSeconds(5);

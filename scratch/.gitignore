@@ -7,5 +7,7 @@
 !azurem-sumo/
 !README.md
 !mec-5g-guimaraes.cc
+!mec-5g-guimaraes/
+!mec-5g-guimaraes/nr_safety_fixes.patch
 !scratch-simulator.cc
 !CMakeLists.txt

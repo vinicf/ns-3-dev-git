@@ -1,0 +1,371 @@
+diff --git a/helper/nr-no-backhaul-epc-helper.cc b/helper/nr-no-backhaul-epc-helper.cc
+index 9e91f241..485ee789 100644
+--- a/helper/nr-no-backhaul-epc-helper.cc
++++ b/helper/nr-no-backhaul-epc-helper.cc
+@@ -427,8 +427,8 @@ NrNoBackhaulEpcHelper::DoAddX2Interface(const Ptr<NrEpcX2>& gnb1X2,
+     NS_LOG_LOGIC("NrGnbNetDevice #1 = " << gnb1NrDev << " - CellId = " << gnb1CellId);
+     NS_LOG_LOGIC("NrGnbNetDevice #2 = " << gnb2NrDev << " - CellId = " << gnb2CellId);
+ 
+-    gnb1X2->AddX2Interface(gnb1CellId, gnb1X2Address, gnb2NrDevice->GetBwpIds(), gnb2X2Address);
+-    gnb2X2->AddX2Interface(gnb2CellId, gnb2X2Address, gnb1NrDevice->GetBwpIds(), gnb1X2Address);
++    gnb1X2->AddX2Interface(gnb1CellId, gnb1X2Address, std::vector<uint16_t>{gnb2CellId}, gnb2X2Address);
++    gnb2X2->AddX2Interface(gnb2CellId, gnb2X2Address, std::vector<uint16_t>{gnb1CellId}, gnb1X2Address);
+ 
+     gnb1NrDevice->GetRrc()->AddX2Neighbour(gnb2CellId);
+     gnb2NrDevice->GetRrc()->AddX2Neighbour(gnb1CellId);
+diff --git a/model/bwp-manager-algorithm.cc b/model/bwp-manager-algorithm.cc
+index cd14a4f4..1dfddebe 100644
+--- a/model/bwp-manager-algorithm.cc
++++ b/model/bwp-manager-algorithm.cc
+@@ -239,7 +239,12 @@ BwpManagerAlgorithmStatic::GetTypeId()
+ uint8_t
+ BwpManagerAlgorithmStatic::GetBwpForQosFlow(const NrQosFlow::FiveQi& v) const
+ {
+-    return m_fiveQiToBwpMap.at(v == 0 ? 1 : v);
++    auto it = m_fiveQiToBwpMap.find(v == 0 ? 1 : v);
++    if (it != m_fiveQiToBwpMap.end())
++    {
++        return it->second;
++    }
++    return 0;
+ }
+ 
+ } // namespace ns3
+diff --git a/model/bwp-manager-ue.cc b/model/bwp-manager-ue.cc
+index 000a9228..f102dc29 100644
+--- a/model/bwp-manager-ue.cc
++++ b/model/bwp-manager-ue.cc
+@@ -55,14 +55,30 @@ BwpManagerUe::DoTransmitBufferStatusReport(NrMacSapProvider::BufferStatusReportP
+     NS_LOG_FUNCTION(this);
+     NS_ASSERT(m_algorithm != nullptr);
+ 
+-    uint8_t bwpIndex = m_algorithm->GetBwpForQosFlow(m_lcToFlowMap.at(params.lcid));
++    auto itFlow = m_lcToFlowMap.find(params.lcid);
++    if (itFlow == m_lcToFlowMap.end())
++    {
++        NS_LOG_WARN("BSR from RLC for LCID = " << static_cast<uint32_t>(params.lcid)
++                                               << " not found in m_lcToFlowMap");
++        return;
++    }
++
++    uint8_t bwpIndex = m_algorithm->GetBwpForQosFlow(itFlow->second);
+ 
+     NS_LOG_DEBUG("BSR of size " << params.txQueueSize
+                                 << " from RLC for LCID = " << static_cast<uint32_t>(params.lcid)
+-                                << " traffic type " << m_lcToFlowMap.at(params.lcid)
++                                << " traffic type " << itFlow->second
+                                 << " reported to CcId " << static_cast<uint32_t>(bwpIndex));
+ 
+-    m_componentCarrierLcMap.at(bwpIndex).at(params.lcid)->BufferStatusReport(params);
++    auto ccIt = m_componentCarrierLcMap.find(bwpIndex);
++    if (ccIt != m_componentCarrierLcMap.end())
++    {
++        auto lcIt = ccIt->second.find(params.lcid);
++        if (lcIt != ccIt->second.end())
++        {
++            lcIt->second->BufferStatusReport(params);
++        }
++    }
+ }
+ 
+ std::vector<NrUeCcmRrcSapProvider::LcsConfig>
+diff --git a/model/nr-mac-scheduler-lcg.cc b/model/nr-mac-scheduler-lcg.cc
+index 4e2a2198..69f6b39b 100644
+--- a/model/nr-mac-scheduler-lcg.cc
++++ b/model/nr-mac-scheduler-lcg.cc
+@@ -80,8 +80,11 @@ void
+ NrMacSchedulerLCG::UpdateInfo(const NrMacSchedSapProvider::SchedDlRlcBufferReqParameters& params)
+ {
+     NS_LOG_FUNCTION(this);
+-    NS_ASSERT(Contains(params.m_logicalChannelIdentity));
+-    m_lcMap.at(params.m_logicalChannelIdentity)->Update(params);
++    auto it = m_lcMap.find(params.m_logicalChannelIdentity);
++    if (it != m_lcMap.end())
++    {
++        it->second->Update(params);
++    }
+ }
+ 
+ void
+@@ -114,8 +117,12 @@ uint32_t
+ NrMacSchedulerLCG::GetTotalSizeOfLC(uint8_t lcId) const
+ {
+     NS_LOG_FUNCTION(this);
+-    NS_ABORT_IF(m_lcMap.empty());
+-    return m_lcMap.at(lcId)->GetTotalSize();
++    auto it = m_lcMap.find(lcId);
++    if (it != m_lcMap.end())
++    {
++        return it->second->GetTotalSize();
++    }
++    return 0;
+ }
+ 
+ std::vector<uint8_t>
+@@ -149,45 +156,58 @@ uint8_t
+ NrMacSchedulerLCG::GetFiveQi(uint8_t lcId) const
+ {
+     NS_LOG_FUNCTION(this);
+-    return m_lcMap.at(lcId)->m_fiveQi;
++    auto it = m_lcMap.find(lcId);
++    if (it != m_lcMap.end())
++    {
++        return it->second->m_fiveQi;
++    }
++    return 0;
+ }
+ 
+ std::unique_ptr<NrMacSchedulerLC>&
+ NrMacSchedulerLCG::GetLC(uint8_t lcId)
+ {
+     NS_LOG_FUNCTION(this);
+-
+-    NS_ASSERT(!m_lcMap.empty());
+-    NS_ASSERT(GetTotalSizeOfLC(lcId) > 0);
+-
+-    return m_lcMap.at(lcId);
++    auto it = m_lcMap.find(lcId);
++    if (it != m_lcMap.end())
++    {
++        return it->second;
++    }
++    static std::unique_ptr<NrMacSchedulerLC> dummy = nullptr;
++    return dummy;
+ }
+ 
+ void
+ NrMacSchedulerLCG::AssignedData(uint8_t lcId, uint32_t size, std::string type)
+ {
+     NS_LOG_FUNCTION(this);
+-    NS_ASSERT(!m_lcMap.empty());
++    auto it = m_lcMap.find(lcId);
++    if (it == m_lcMap.end())
++    {
++        NS_LOG_WARN("AssignedData called for unmapped or released lcId: " << +lcId);
++        return;
++    }
++    auto& lc = it->second;
+ 
+     NS_LOG_INFO("Assigning " << size << " bytes to lcId: " << +lcId);
+     // Update queues: RLC tx order Status, ReTx, Tx. To understand this, you have
+     // to see RlcAm::NotifyTxOpportunity
+     NS_LOG_INFO("Status of LCID " << static_cast<uint32_t>(lcId)
+-                                  << " before: RLC PDU =" << m_lcMap.at(lcId)->m_rlcStatusPduSize
+-                                  << ", RLC RX=" << m_lcMap.at(lcId)->m_rlcRetransmissionQueueSize
+-                                  << ", RLC TX=" << m_lcMap.at(lcId)->m_rlcTransmissionQueueSize);
++                                  << " before: RLC PDU =" << lc->m_rlcStatusPduSize
++                                  << ", RLC RX=" << lc->m_rlcRetransmissionQueueSize
++                                  << ", RLC TX=" << lc->m_rlcTransmissionQueueSize);
+ 
+-    if ((m_lcMap.at(lcId)->m_rlcStatusPduSize > 0) &&
+-        (size >= m_lcMap.at(lcId)->m_rlcStatusPduSize))
++    if ((lc->m_rlcStatusPduSize > 0) &&
++        (size >= lc->m_rlcStatusPduSize))
+     {
+-        m_lcMap.at(lcId)->m_rlcStatusPduSize = 0;
++        lc->m_rlcStatusPduSize = 0;
+     }
+-    else if ((m_lcMap.at(lcId)->m_rlcRetransmissionQueueSize > 0) &&
+-             (size >= m_lcMap.at(lcId)->m_rlcRetransmissionQueueSize))
++    else if ((lc->m_rlcRetransmissionQueueSize > 0) &&
++             (size >= lc->m_rlcRetransmissionQueueSize))
+     {
+-        m_lcMap.at(lcId)->m_rlcRetransmissionQueueSize = 0;
++        lc->m_rlcRetransmissionQueueSize = 0;
+     }
+-    else if (m_lcMap.at(lcId)->m_rlcTransmissionQueueSize >
++    else if (lc->m_rlcTransmissionQueueSize >
+              0) // if not enough size for retransmission use if for transmission if there is any
+                 // data to be transmitted
+     {
+@@ -208,16 +228,16 @@ NrMacSchedulerLCG::AssignedData(uint8_t lcId, uint32_t size, std::string type)
+             rlcOverhead = 2;
+         }
+ 
+-        if (size - rlcOverhead >= m_lcMap.at(lcId)->m_rlcTransmissionQueueSize)
++        if (size - rlcOverhead >= lc->m_rlcTransmissionQueueSize)
+         {
+             // we can transmit everything from the queue, reset it
+-            m_lcMap.at(lcId)->m_rlcTransmissionQueueSize = 0;
++            lc->m_rlcTransmissionQueueSize = 0;
+         }
+         else
+         {
+             // not enough to empty all queue, but send what you can, this is normal situation to
+             // happen
+-            m_lcMap.at(lcId)->m_rlcTransmissionQueueSize -= size - rlcOverhead;
++            lc->m_rlcTransmissionQueueSize -= size - rlcOverhead;
+         }
+ 
+         // If there are 5 bytes the RLC TX queue info at MAC, MAC will assign 5 bytes Tx
+@@ -228,18 +248,18 @@ NrMacSchedulerLCG::AssignedData(uint8_t lcId, uint32_t size, std::string type)
+         // the same page". We however should take into account the next UL SHORT_BSR (we add 5
+         // bytes, because in the current TX opportunity 5 bytes is being spent on SHORT_BSR).
+ 
+-        if (type == "UL" && m_lcMap.at(lcId)->m_rlcTransmissionQueueSize > 0 &&
+-            m_lcMap.at(lcId)->m_rlcTransmissionQueueSize < 12)
++        if (type == "UL" && lc->m_rlcTransmissionQueueSize > 0 &&
++            lc->m_rlcTransmissionQueueSize < 12)
+         {
+-            m_lcMap.at(lcId)->m_rlcTransmissionQueueSize = 12;
++            lc->m_rlcTransmissionQueueSize = 12;
+         }
+ 
+         // in order to take into account the MAC header of 3 bytes
+         // 10 -3 = 7 which is the minimum allowed TX opportunity by RLC AM
+-        if (type == "DL" && m_lcMap.at(lcId)->m_rlcTransmissionQueueSize > 0 &&
+-            m_lcMap.at(lcId)->m_rlcTransmissionQueueSize < 10)
++        if (type == "DL" && lc->m_rlcTransmissionQueueSize > 0 &&
++            lc->m_rlcTransmissionQueueSize < 10)
+         {
+-            m_lcMap.at(lcId)->m_rlcTransmissionQueueSize = 10;
++            lc->m_rlcTransmissionQueueSize = 10;
+         }
+     }
+     else
+@@ -249,9 +269,9 @@ NrMacSchedulerLCG::AssignedData(uint8_t lcId, uint32_t size, std::string type)
+     }
+ 
+     NS_LOG_INFO("Status of LCID " << static_cast<uint32_t>(lcId)
+-                                  << " after: RLC PDU=" << m_lcMap.at(lcId)->m_rlcStatusPduSize
+-                                  << ", RLC RX=" << m_lcMap.at(lcId)->m_rlcRetransmissionQueueSize
+-                                  << ", RLC TX=" << m_lcMap.at(lcId)->m_rlcTransmissionQueueSize);
++                                  << " after: RLC PDU=" << lc->m_rlcStatusPduSize
++                                  << ", RLC RX=" << lc->m_rlcRetransmissionQueueSize
++                                  << ", RLC TX=" << lc->m_rlcTransmissionQueueSize);
+ }
+ 
+ void
+diff --git a/model/nr-mac-scheduler-ns3.cc b/model/nr-mac-scheduler-ns3.cc
+index 74c289f9..9032fd80 100644
+--- a/model/nr-mac-scheduler-ns3.cc
++++ b/model/nr-mac-scheduler-ns3.cc
+@@ -918,7 +918,7 @@ NrMacSchedulerNs3::DoSchedDlCqiInfoReq(
+ 
+     for (const auto& cqi : params.m_cqiList)
+     {
+-        NS_ASSERT(m_ueMap.find(cqi.m_rnti) != m_ueMap.end());
++        if (m_ueMap.find(cqi.m_rnti) == m_ueMap.end()) continue;
+         const std::shared_ptr<NrMacSchedulerUeInfo>& ue = m_ueMap.find(cqi.m_rnti)->second;
+         m_cqiManagement.DlCqiReported(cqi, ue, expirationTime, m_maxDlMcs, GetBandwidthInRbg());
+         m_csiFeedbackReceived(GetCellId(), GetBwpId(), ue);
+@@ -967,7 +967,7 @@ NrMacSchedulerNs3::DoSchedUlCqiInfoReq(
+                                            << static_cast<uint32_t>(symStart));
+ 
+         auto itAlloc = m_ulAllocationMap.find(ulSfnSf.GetEncoding());
+-        NS_ASSERT_MSG(itAlloc != m_ulAllocationMap.end(), "Can't find allocation for " << ulSfnSf);
++        if (itAlloc == m_ulAllocationMap.end()) { NS_LOG_WARN("Can't find allocation for " << ulSfnSf); return; }
+         std::vector<AllocElem>& ulAllocations = itAlloc->second.m_ulAllocations;
+ 
+         for (auto it = ulAllocations.cbegin(); it != ulAllocations.cend(); /* NO INC */)
+@@ -976,7 +976,7 @@ NrMacSchedulerNs3::DoSchedUlCqiInfoReq(
+             if (allocation.m_symStart == symStart)
+             {
+                 auto itUe = m_ueMap.find(allocation.m_rnti);
+-                NS_ASSERT(itUe != m_ueMap.end());
++                if (itUe == m_ueMap.end()) { found = true; it = ulAllocations.erase(it); continue; }
+                 NS_ASSERT(allocation.m_numSym > 0);
+                 NS_ASSERT(allocation.m_tbs > 0);
+ 
+@@ -1537,7 +1537,11 @@ NrMacSchedulerNs3::DoScheduleDlData(PointInFTPlane* spoint,
+                 slotInfo.m_rlcPduInfo.push_back(newRlcPdu);
+                 process.m_rlcPduInfo.push_back(newRlcPdu);
+ 
+-                ue.first->m_dlLCG.at(lcgId)->AssignedData(lcId, bytes, "DL");
++                auto itLcg = ue.first->m_dlLCG.find(lcgId);
++                if (itLcg != ue.first->m_dlLCG.end())
++                {
++                    itLcg->second->AssignedData(lcId, bytes, "DL");
++                }
+ 
+                 NS_LOG_DEBUG("DL LCG " << static_cast<uint32_t>(lcgId) << " LCID "
+                                        << static_cast<uint32_t>(lcId) << " got bytes "
+@@ -1706,8 +1710,11 @@ NrMacSchedulerNs3::DoScheduleUlData(PointInFTPlane* spoint,
+             for (const auto& byteDistribution : distributedBytes)
+             {
+                 assignedToLC = true;
+-                ue.first->m_ulLCG.at(byteDistribution.m_lcg)
+-                    ->AssignedData(byteDistribution.m_lcId, byteDistribution.m_bytes, "UL");
++                auto itLcg = ue.first->m_ulLCG.find(byteDistribution.m_lcg);
++                if (itLcg != ue.first->m_ulLCG.end())
++                {
++                    itLcg->second->AssignedData(byteDistribution.m_lcId, byteDistribution.m_bytes, "UL");
++                }
+                 NS_LOG_DEBUG("UL LCG " << static_cast<uint32_t>(byteDistribution.m_lcg)
+                                        << " assigned bytes " << byteDistribution.m_bytes
+                                        << " to LCID "
+@@ -1756,7 +1763,12 @@ NrMacSchedulerNs3::DoScheduleUlSr(PointInFTPlane* spoint, const std::list<uint16
+ 
+     for (const auto& v : rntiList)
+     {
+-        for (auto& ulLcg : NrMacSchedulerUeInfo::GetUlLCG(m_ueMap.at(v)))
++        auto itUe = m_ueMap.find(v);
++        if (itUe == m_ueMap.end())
++        {
++            continue;
++        }
++        for (auto& ulLcg : NrMacSchedulerUeInfo::GetUlLCG(itUe->second))
+         {
+             NS_LOG_DEBUG("Assigning 12 bytes to UE " << v << " because of a SR");
+             ulLcg.second->UpdateInfo(12);
+diff --git a/model/nr-mac-scheduler-tdma.cc b/model/nr-mac-scheduler-tdma.cc
+index a88b8af0..68e84598 100644
+--- a/model/nr-mac-scheduler-tdma.cc
++++ b/model/nr-mac-scheduler-tdma.cc
+@@ -577,7 +577,12 @@ NrMacSchedulerTdma::DoReshapeAllocation(
+     // Step 1, pick a dci
+     for (auto dci : dcis)
+     {
+-        auto& ueInfo = ueMap.at(dci.m_rnti);
++        auto itUe = ueMap.find(dci.m_rnti);
++        if (itUe == ueMap.end())
++        {
++            continue;
++        }
++        auto& ueInfo = itUe->second;
+ 
+         // Step 2, compute the number of resources needed
+         const std::size_t numResources =
+diff --git a/model/nr-ue-mac.cc b/model/nr-ue-mac.cc
+index 53ef9217..89e17410 100644
+--- a/model/nr-ue-mac.cc
++++ b/model/nr-ue-mac.cc
+@@ -883,7 +883,11 @@ NrUeMac::SendRetxData(uint32_t usefulTbs, uint32_t activeLcsRetx)
+                                                     "of "
+                                                  << bytesPerLcId << " B for a RETX PDU");
+ 
+-            m_lcInfoMap.at(bsr.lcid).macSapUser->NotifyTxOpportunity(txParams);
++            auto itLc = m_lcInfoMap.find(bsr.lcid);
++            if (itLc != m_lcInfoMap.end())
++            {
++                itLc->second.macSapUser->NotifyTxOpportunity(txParams);
++            }
+             // After this call, m_ulDciTotalUsed has been updated with the
+             // correct amount of bytes... but it is up to us in updating the BSR
+             // value, subtracting the amount of bytes transmitted
+@@ -935,7 +939,11 @@ NrUeMac::SendTxData(uint32_t usefulTbs, uint32_t activeTx)
+                                                     "of "
+                                                  << bytesPerLcId << " B for a TX PDU");
+ 
+-            m_lcInfoMap.at(bsr.lcid).macSapUser->NotifyTxOpportunity(txParams);
++            auto itLc = m_lcInfoMap.find(bsr.lcid);
++            if (itLc != m_lcInfoMap.end())
++            {
++                itLc->second.macSapUser->NotifyTxOpportunity(txParams);
++            }
+             // After this call, m_ulDciTotalUsed has been updated with the
+             // correct amount of bytes... but it is up to us in updating the BSR
+             // value, subtracting the amount of bytes transmitted
+@@ -1091,7 +1099,11 @@ NrUeMac::SendNewStatusData()
+                                                         "of "
+                                                      << bsr.statusPduSize << " B for a status PDU");
+ 
+-                m_lcInfoMap.at(bsr.lcid).macSapUser->NotifyTxOpportunity(txParams);
++                auto itLc = m_lcInfoMap.find(bsr.lcid);
++            if (itLc != m_lcInfoMap.end())
++            {
++                itLc->second.macSapUser->NotifyTxOpportunity(txParams);
++            }
+                 // After this call, m_ulDciTotalUsed has been updated with the
+                 // correct amount of bytes... but it is up to us in updating the BSR
+                 // value, subtracting the amount of bytes transmitted
